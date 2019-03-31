@@ -58,13 +58,13 @@
 
 // Number of maximum high/Low changes per packet.
 // We can handle up to (unsigned long) => 32 bit * 2 H/L changes per bit + 2 for sync
-#define RCSWITCH_MAX_CHANGES 67
+#define RCSWITCH_MAX_CHANGES 75
 
 class RCSwitch {
 
   public:
     RCSwitch();
-    
+
     void switchOn(int nGroupNumber, int nSwitchNumber);
     void switchOff(int nGroupNumber, int nSwitchNumber);
     void switchOn(const char* sGroup, int nSwitchNumber);
@@ -79,7 +79,7 @@ class RCSwitch {
     void sendTriState(const char* sCodeWord);
     void send(unsigned long code, unsigned int length);
     void send(const char* sCodeWord);
-    
+
     #if not defined( RCSwitchDisableReceiving )
     void enableReceive(int interrupt);
     void enableReceive();
@@ -93,7 +93,7 @@ class RCSwitch {
     unsigned int getReceivedProtocol();
     unsigned int* getReceivedRawdata();
     #endif
-  
+
     void enableTransmit(int nTransmitterPin);
     void disableTransmit();
     void setPulseLength(int nPulseLength);
@@ -142,6 +142,7 @@ class RCSwitch {
          * FOO.low*pulseLength microseconds.
          */
         bool invertedSignal;
+        int dataBitsCount;
     };
 
     void setProtocol(Protocol protocol);
@@ -162,7 +163,7 @@ class RCSwitch {
     #endif
     int nTransmitterPin;
     int nRepeatTransmit;
-    
+
     Protocol protocol;
 
     #if not defined( RCSwitchDisableReceiving )
