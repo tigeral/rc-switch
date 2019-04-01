@@ -50,7 +50,7 @@
 
 
 /* Format for protocol definitions:
- * {pulselength, Sync bit, "0" bit, "1" bit}
+ * {pulselength, Sync bit, "0" bit, "1" bit, invertedSignal, dataBitsCount, syncPulsesCount, lastDataPulseNotLimited}
  *
  * pulselength: pulse length in microseconds, e.g. 350
  * Sync bit: {1, 31} means 1 high pulse and 31 low pulses
@@ -67,20 +67,34 @@
  *     |   |_
  *
  * These are combined to form Tri-State bits when sending or receiving codes.
+ *
+ * dataBitsCount: some protocols (like FUT041 remote) has non-data pulses between the signal repeat.
+ *     In this case we have to limit data bits count.
+ * syncPulsesCount: number of Sync Bit pulses stored in the timings array.
+ *     Some protocols (like ZC11-01 remote) has long low pulse before the Sync bit.
+ *     So, we have to skip more pulses from the begin of timings array before we can start read data bits.
+ * lastDataPulseNotLimited: some protocols (like ZC11-01 remote) has a delay between transactions before repeat the signal.
+ *     So, the last (low) pulse of the last byte is no limited by a level change. Its length == last pulse length + delay length.
+ *     If the lastDataPulseNotLimited == true then only High pulse of the last bit will be measured.
  */
 #if defined(ESP8266) || defined(ESP32)
 static const RCSwitch::Protocol proto[] = {
 #else
 static const RCSwitch::Protocol PROGMEM proto[] = {
 #endif
-  { 350, {  1, 31 }, {  1,  3 }, {  3,  1 }, false, -1 },    // protocol 1
-  { 650, {  1, 10 }, {  1,  2 }, {  2,  1 }, false, -1 },    // protocol 2
-  { 100, { 30, 71 }, {  4, 11 }, {  9,  6 }, false, -1 },    // protocol 3
-  { 380, {  1,  6 }, {  1,  3 }, {  3,  1 }, false, -1 },    // protocol 4
-  { 500, {  6, 14 }, {  1,  2 }, {  2,  1 }, false, -1 },    // protocol 5
-  { 450, { 23,  1 }, {  1,  2 }, {  2,  1 }, true,  -1 },    // protocol 6 (HT6P20B)
-  { 150, {  2, 62 }, {  1,  6 }, {  6,  1 }, false, -1 }     // protocol 7 (HS2303-PT, i. e. used in AUKEY Remote)
-  { 202, {  6,  6 }, {  1,  3 }, {  3,  1 }, false, 32},     // tigeral added protocol 1 FUT041. Require RCSwitch::nSeparationLimit = 1100.
+  { 350, {  1, 31 }, {  1,  3 }, {  3,  1 }, false, -1, 1, false },    // protocol 1
+  { 650, {  1, 10 }, {  1,  2 }, {  2,  1 }, false, -1, 1, false },    // protocol 2
+  { 100, { 30, 71 }, {  4, 11 }, {  9,  6 }, false, -1, 1, false },    // protocol 3. Requires RCSwitch::nSeparationLimitMin > 3000.
+  { 380, {  1,  6 }, {  1,  3 }, {  3,  1 }, false, -1, 1, false },    // protocol 4. Requires RCSwitch::nSeparationLimitMin < 2280.
+  { 500, {  6, 14 }, {  1,  2 }, {  2,  1 }, false, -1, 1, false },    // protocol 5. Requires RCSwitch::nSeparationLimitMin > 3000.
+  { 450, { 23,  1 }, {  1,  2 }, {  2,  1 }, true,  -1, 2, false },    // protocol 6 (HT6P20B)
+  { 150, {  2, 62 }, {  1,  6 }, {  6,  1 }, false, -1, 1, false },    // protocol 7 (HS2303-PT, i. e. used in AUKEY Remote)
+  { 202, {  6,  6 }, {  1,  3 }, {  3,  1 }, false, 32, 1, false },    // tigeral added protocol 1 FUT041. Requires RCSwitch::nSeparationLimitMin < 1200.
+  { 360, { 13,  4 }, {  1,  2 }, {  2,  1 }, false, 40, 2, true  },    // tigeral added protocol 2 ZC11-01. Requires RCSwitch::nSeparationLimitMin > 1440 and nSeparationLimitMax < 8630.
+  { 100, { 30, 71 }, {  4, 11 }, {  9,  6 }, false, -1, 2, false },    // protocol 3 mod. Requires RCSwitch::nSeparationLimitMin < 3000 and RCSwitch::nSeparationLimitMax < 7100.
+  { 500, {  6, 14 }, {  1,  2 }, {  2,  1 }, false, -1, 2, false },    // protocol 5 mod. Requires RCSwitch::nSeparationLimitMin < 3000 and RCSwitch::nSeparationLimitMax < 7000.
+  { 360, { 13,  4 }, {  1,  2 }, {  2,  1 }, false, 40, 1, true  },    // ZC11-01 mod. Requires RCSwitch::nSeparationLimitMin > 720 but < 1440 and RCSwitch::nSeparationLimitMax < 4630.
+  { 360, { 13,  4 }, {  1,  2 }, {  2,  1 }, false, 40, 3, true  },    // ZC11-01 mod2. Requires RCSwitch::nSeparationLimitMin > 4630 and nSeparationLimitMax > 8630.
 };
 
 enum {
@@ -95,7 +109,37 @@ volatile unsigned int RCSwitch::nReceivedBitlength = 0;
 volatile unsigned int RCSwitch::nReceivedDelay = 0;
 volatile unsigned int RCSwitch::nReceivedProtocol = 0;
 int RCSwitch::nReceiveTolerance = 60;
-const unsigned int RCSwitch::nSeparationLimit = 1100;
+/*
+ * The nSeparationLimitMin and nSeparationLimitMax values are used to detect
+ * and record the signal in the handleInterrupt method.
+ *
+ * The nSeparationLimit min/max values reqirements for different protocols:
+ * protocol 1      1100 < min < 10850 < max
+ * protocol 2      1300 < min <  6500 < max
+ * protocol 3      3000 < min <  7100 < max
+ * protocol 4      1140 < min <  2280 < max
+ * protocol 5      3000 < min <  7000 < max
+ * protocol 6       900 < min < 10350 < max
+ * protocol 7       900 < min <  9300 < max
+ * FUT041           606 < min <  1212 < max
+ * ZC11-01         1440 < min <  4630 < max < 8630
+ * protocol 3 mod  1100 < min <  3000 < max < 7100
+ * protocol 5 mod  1000 < min <  3000 < max < 7000
+ * ZC11-01 mod      720 < min <  1440 < max < 4630
+ * ZC11-01 mod2    4630 < min <  8630 < max
+ *
+ * For example, {min, max} = {1170, 4400} will allow us to use
+ * protocols #3 mod, #4, #5 mod, #6, #7, FUT041 and ZC11-01 mod at the same time.
+ * {min, max} = {1170, 13000} allows protocols #1, #4, #6, #7 and FUT041.
+ * {min, max} = {5000, 13000} allows protocols #1, #2, #3, #5, #6, #7 and ZC11-01 mod2.
+ *
+ * Feel free to adjust these values for the better signal timing tolerance
+ * during the signal detection phase.
+ *
+ */
+const unsigned int RCSwitch::nSeparationLimitMin = 4000;
+const unsigned int RCSwitch::nSeparationLimitMax = 7000;
+const unsigned int RCSwitch::nSeparationDiffTolerance = 400;
 // separationLimit: minimum microseconds between received codes, closer codes are ignored.
 // according to discussion on issue #14 it might be more suitable to set the separation
 // limit to the same time as the 'low' part of the sync signal for the current protocol.
@@ -610,9 +654,10 @@ bool RECEIVE_ATTR RCSwitch::receiveProtocol(const int p, unsigned int changeCoun
 #endif
 
     unsigned long code = 0;
-    //Assuming the longer pulse length is the pulse captured in timings[0]
-    const unsigned int syncLengthInPulses =  ((pro.syncFactor.low) > (pro.syncFactor.high)) ? (pro.syncFactor.low) : (pro.syncFactor.high);
-    const unsigned int delay = RCSwitch::timings[0] / syncLengthInPulses;
+//  //Assuming the longer pulse length is the pulse captured in timings[0]
+//    const unsigned int syncLengthInPulses =  ((pro.syncFactor.low) > (pro.syncFactor.high)) ? (pro.syncFactor.low) : (pro.syncFactor.high);
+//    const unsigned int delay = RCSwitch::timings[0] / syncLengthInPulses;
+    const unsigned int delay = pro.pulseLength;
     const unsigned int delayTolerance = delay * RCSwitch::nReceiveTolerance / 100;
 
     /* For protocols that start low, the sync period looks like
@@ -632,21 +677,31 @@ bool RECEIVE_ATTR RCSwitch::receiveProtocol(const int p, unsigned int changeCoun
      *
      * The 2nd saved duration starts the data
      */
-    const unsigned int firstDataTiming = (pro.invertedSignal) ? (2) : (1);
+    const unsigned int firstDataTiming = pro.syncPulsesCount;
     unsigned int dataTimingsIndexLimit = pro.dataBitsCount > 0 ? pro.dataBitsCount * 2 + firstDataTiming : changeCount - 1;
 
     for (unsigned int i = firstDataTiming; i < dataTimingsIndexLimit; i += 2) {
         code <<= 1;
-        if (diff(RCSwitch::timings[i], delay * pro.zero.high) < delayTolerance &&
-            diff(RCSwitch::timings[i + 1], delay * pro.zero.low) < delayTolerance) {
-            // zero
-        } else if (diff(RCSwitch::timings[i], delay * pro.one.high) < delayTolerance &&
-                   diff(RCSwitch::timings[i + 1], delay * pro.one.low) < delayTolerance) {
-            // one
-            code |= 1;
+        if (pro.lastDataPulseNotLimited && (i >= dataTimingsIndexLimit - 2)) {
+            if (diff(RCSwitch::timings[i], delay * pro.zero.high) < delayTolerance) {
+            } else if (diff(RCSwitch::timings[i], delay * pro.one.high) < delayTolerance) {
+                code |= 1;
+            } else {
+                // Failed
+                return false;
+            }
         } else {
-            // Failed
-            return false;
+            if (diff(RCSwitch::timings[i], delay * pro.zero.high) < delayTolerance &&
+                diff(RCSwitch::timings[i + 1], delay * pro.zero.low) < delayTolerance) {
+                // zero
+            } else if (diff(RCSwitch::timings[i], delay * pro.one.high) < delayTolerance &&
+                       diff(RCSwitch::timings[i + 1], delay * pro.one.low) < delayTolerance) {
+                // one
+                code |= 1;
+            } else {
+                // Failed
+                return false;
+            }
         }
     }
 
@@ -669,23 +724,23 @@ void RECEIVE_ATTR RCSwitch::handleInterrupt() {
   if (duration > RCSwitch::nSeparationLimit) {
     // A long stretch without signal level change occurred. This could
     // be the gap between two transmission.
-    if (diff(duration, RCSwitch::timings[0]) < 200) {
-      if (changeCount > 7) { // ignore very short transmissions: no device sends them, so this must be noise
-        // This long signal is close in length to the long signal which
-        // started the previously recorded timings; this suggests that
-        // it may indeed by a a gap between two transmissions (we assume
-        // here that a sender will send the signal multiple times,
-        // with roughly the same gap between them).
-        repeatCount++;
-        if (repeatCount == 2) {
+    if (diff(duration, RCSwitch::timings[0]) < RCSwitch::nSeparationDiffTolerance) {
+      // This long signal is close in length to the long signal which
+      // started the previously recorded timings; this suggests that
+      // it may indeed by a a gap between two transmissions (we assume
+      // here that a sender will send the signal multiple times,
+      // with roughly the same gap between them).
+      repeatCount++;
+      if (repeatCount == 2) {
+        if (changeCount > 7) { // ignore very short transmissions: no device sends them, so this must be noise
           for(unsigned int i = 1; i <= numProto; i++) {
             if (receiveProtocol(i, changeCount)) {
               // receive succeeded for protocol i
               break;
             }
           }
-          repeatCount = 0;
         }
+        repeatCount = 0;
       }
     }
     changeCount = 0;

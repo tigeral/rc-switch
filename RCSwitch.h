@@ -58,7 +58,7 @@
 
 // Number of maximum high/Low changes per packet.
 // We can handle up to (unsigned long) => 32 bit * 2 H/L changes per bit + 2 for sync
-#define RCSWITCH_MAX_CHANGES 75
+#define RCSWITCH_MAX_CHANGES 83
 
 class RCSwitch {
 
@@ -120,7 +120,6 @@ class RCSwitch {
     struct Protocol {
         /** base pulse length in microseconds, e.g. 350 */
         uint16_t pulseLength;
-
         HighLow syncFactor;
         HighLow zero;
         HighLow one;
@@ -143,6 +142,8 @@ class RCSwitch {
          */
         bool invertedSignal;
         int dataBitsCount;
+        int syncPulsesCount;
+        bool lastDataPulseNotLimited;
     };
 
     void setProtocol(Protocol protocol);
