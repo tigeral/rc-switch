@@ -173,8 +173,10 @@ class RCSwitch {
     volatile static unsigned int nReceivedBitlength;
     volatile static unsigned int nReceivedDelay;
     volatile static unsigned int nReceivedProtocol;
-    const static unsigned int nSeparationLimit;
-    /* 
+    const static unsigned int nSeparationLimitMin;
+    const static unsigned int nSeparationLimitMax;
+    const static unsigned int nSeparationDiffTolerance;
+    /*
      * timings[0] contains sync timing, followed by a number of bits
      */
     static unsigned int timings[RCSWITCH_MAX_CHANGES];

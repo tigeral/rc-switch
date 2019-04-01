@@ -52,7 +52,7 @@
 /* Format for protocol definitions:
  * {pulselength, Sync bit, "0" bit, "1" bit, invertedSignal, dataBitsCount, syncPulsesCount, lastDataPulseNotLimited}
  *
- * pulselength: pulse length in microseconds, e.g. 350
+ * pulseLength: pulse length in microseconds, e.g. 350. If pulseLength <= 0 then it will be calculated automatically
  * Sync bit: {1, 31} means 1 high pulse and 31 low pulses
  *     (perceived as a 31*pulselength long pulse, total length of sync bit is
  *     32*pulselength microseconds), i.e:
@@ -82,8 +82,8 @@ static const RCSwitch::Protocol proto[] = {
 #else
 static const RCSwitch::Protocol PROGMEM proto[] = {
 #endif
-  { 350, {  1, 31 }, {  1,  3 }, {  3,  1 }, false, -1, 1, false },    // protocol 1
-  { 650, {  1, 10 }, {  1,  2 }, {  2,  1 }, false, -1, 1, false },    // protocol 2
+  {   0, {  1, 31 }, {  1,  3 }, {  3,  1 }, false, -1, 1, false },    // protocol 1. Common pulseLength is 350 microseconds.
+  { 650, {  1, 10 }, {  1,  2 }, {  2,  1 }, false, -1, 1, false },    // protocol 2.
   { 100, { 30, 71 }, {  4, 11 }, {  9,  6 }, false, -1, 1, false },    // protocol 3. Requires RCSwitch::nSeparationLimitMin > 3000.
   { 380, {  1,  6 }, {  1,  3 }, {  3,  1 }, false, -1, 1, false },    // protocol 4. Requires RCSwitch::nSeparationLimitMin < 2280.
   { 500, {  6, 14 }, {  1,  2 }, {  2,  1 }, false, -1, 1, false },    // protocol 5. Requires RCSwitch::nSeparationLimitMin > 3000.
@@ -137,8 +137,8 @@ int RCSwitch::nReceiveTolerance = 60;
  * during the signal detection phase.
  *
  */
-const unsigned int RCSwitch::nSeparationLimitMin = 4000;
-const unsigned int RCSwitch::nSeparationLimitMax = 7000;
+const unsigned int RCSwitch::nSeparationLimitMin = 1170;
+const unsigned int RCSwitch::nSeparationLimitMax = 20000;
 const unsigned int RCSwitch::nSeparationDiffTolerance = 400;
 // separationLimit: minimum microseconds between received codes, closer codes are ignored.
 // according to discussion on issue #14 it might be more suitable to set the separation
@@ -654,10 +654,9 @@ bool RECEIVE_ATTR RCSwitch::receiveProtocol(const int p, unsigned int changeCoun
 #endif
 
     unsigned long code = 0;
-//  //Assuming the longer pulse length is the pulse captured in timings[0]
-//    const unsigned int syncLengthInPulses =  ((pro.syncFactor.low) > (pro.syncFactor.high)) ? (pro.syncFactor.low) : (pro.syncFactor.high);
-//    const unsigned int delay = RCSwitch::timings[0] / syncLengthInPulses;
-    const unsigned int delay = pro.pulseLength;
+    //Assuming the longer pulse length is the pulse captured in timings[0]
+    const unsigned int syncLengthInPulses =  ((pro.syncFactor.low) > (pro.syncFactor.high)) ? (pro.syncFactor.low) : (pro.syncFactor.high);
+    const unsigned int delay = RCSwitch::timings[0] / syncLengthInPulses;
     const unsigned int delayTolerance = delay * RCSwitch::nReceiveTolerance / 100;
 
     /* For protocols that start low, the sync period looks like
@@ -721,7 +720,7 @@ void RECEIVE_ATTR RCSwitch::handleInterrupt() {
   const long time = micros();
   const unsigned int duration = time - lastTime;
 
-  if (duration > RCSwitch::nSeparationLimit) {
+  if (duration > RCSwitch::nSeparationLimitMin && duration < RCSwitch::nSeparationLimitMax) {
     // A long stretch without signal level change occurred. This could
     // be the gap between two transmission.
     if (diff(duration, RCSwitch::timings[0]) < RCSwitch::nSeparationDiffTolerance) {
